@@ -4,6 +4,13 @@ name: Android 构建
 #   1. 往 main / master 推代码，且改动了 android/ 目录
 #   2. 发 PR 时先验证能不能编译过
 #   3. 手动点按钮触发（可以顺便指定后端地址）
+# ⚠️ 关于第一次运行：
+# workflow 文件本身**首次**被推送上去时，GitHub 处理那一次 push 事件时
+# 这个 workflow 还没注册完，所以不会触发构建 —— 这是 GitHub 的已知行为，
+# 不是配置写错了。
+# 补救办法：去仓库的 Actions 页面点一次
+#     Android 构建 → Run workflow → 选 main → Run
+# 之后只要改动 android/ 下的代码，每次 push 都会自动跑。
 on:
   push:
     branches: [main, master]

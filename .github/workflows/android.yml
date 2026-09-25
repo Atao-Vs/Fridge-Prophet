@@ -56,8 +56,11 @@ jobs:
 
       # GitHub 的 ubuntu runner 自带 Android SDK，但默认不带 android-36，
       # 必须显式装，否则编译时报 "failed to find target with hash string android-36"
+      # ⚠️ 这里必须用 @v4。@v3 在 Ubuntu 24.04 的 runner 上会直接失败
+      # （实测 15 秒就挂在这一步，后面的步骤全部 skipped，报错还看不出原因）。
+      # v4 会下载 cmdline-tools、接受许可、并把 sdkmanager 加进 PATH。
       - name: 安装 Android SDK 组件
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: 补齐 platform 36 与 build-tools
         run: |

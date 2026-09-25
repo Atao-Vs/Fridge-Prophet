@@ -97,13 +97,24 @@ jobs:
       # ---------- 构建 ----------
       # 注意：这里不写 gradle.properties 里的地址，全部靠 -P 注入，
       # 保证「代码里没有环境相关的常量」这条规则不被破坏。
+      # ⚠️ 这里必须覆盖 jvmargs。
+      # gradle.properties 里设了 -Dfile.encoding=GBK，那是为了应对 Windows 上的
+      # 中文项目路径（G:\workbuddy\任务路径\...），本地不加它会报 ClassNotFoundException。
+      # 但 Linux runner 的工作目录是纯 ASCII 的
+      # /home/runner/work/Fridge-Prophet/Fridge-Prophet，
+      # GBK 在那里不但没用，还会让 UTF-8 源码里的中文被按 GBK 解码，直接编译失败。
+      # 用 -Dorg.gradle.jvmargs 整体覆盖掉它，平台差异只在这一行处理。
       - name: 构建 debug 包
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx3072m -XX:+UseParallelGC"
         env:
           API_BASE_URL: ${{ inputs.api_base_url }}
 
       - name: 构建 release 包
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx3072m -XX:+UseParallelGC"
         env:
           API_BASE_URL: ${{ inputs.api_base_url }}
 

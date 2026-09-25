@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  【仅 debug 包生效】允许明文 HTTP。
+
+  开发期后端跑在 http://10.0.2.2:8000（模拟器）或 http://192.168.x.x:8000（真机），
+  都是明文。这份配置会在构建 debug 包时覆盖 main 里的严格版本，
+  release 包不受影响，仍然只允许 HTTPS。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

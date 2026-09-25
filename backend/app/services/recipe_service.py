@@ -1,0 +1,402 @@
+"""AI 2：菜谱生成。
+
+关键设计（对应策划书第五节）：
+    规则系统负责约束，AI 负责理解和生成。
+
+也就是说——模型只负责「想菜名、写步骤、估营养」，
+**食材是否在库存里、缺多少，全部由后端用真实库存重算**，
+不采信模型自报的 available 字段。这样才不会出现「AI 说你有豆腐其实没有」。
+"""
+from __future__ import annotations
+
+import logging
+
+from app.core.config import settings
+from app.models.inventory import FoodInventory
+from app.models.user import HealthPreference, UserPreference
+from app.schemas.recipe import (
+    MissingIngredient,
+    NutritionEstimate,
+    RecipeIngredientOut,
+    RecipeOut,
+)
+from app.services.ai_client import AIUnavailable, ai_client
+from app.services.food_image_service import resolve_image_url
+
+logger = logging.getLogger(__name__)
+
+RECIPE_SYSTEM_PROMPT = """你是一位擅长中国家常菜的营养厨师，服务于「冰箱先知」这个 App。
+用户会给你他的冰箱库存、饮食偏好和健康约束，你需要推荐真正能做的菜。
+
+严格规则：
+1. 只输出 JSON，不要输出任何解释、Markdown 代码块或额外说明。
+2. 【最重要】绝对不能编造库存。你只能在用户给出的库存清单范围内声称「有」某种食材。
+   如果一道菜需要库存里没有的东西，把它放进 missing_ingredients，不要放进 ingredients 的 available 项。
+3. 优先消耗用户标记为「即将过期」的食材，尽量让每道菜都用到至少一种。
+4. 严格避开用户明确过敏的食材——这是硬性红线，一道菜里出现即视为错误。
+5. 避开用户明确不喜欢的食材。
+6. 遵守用户的烹饪时间上限，time_minutes 不能超过用户给的上限。
+7. 符合用户的饮食目标（减脂→少油少糖、增肌/高蛋白→多蛋白、素食→不含任何肉类海鲜）。
+8. 每道菜的步骤要具体可操作，写清楚火候和顺序，3 到 8 步。
+9. 营养数据是估算值，按每份计算，宁可给区间中值也不要空着。
+10. 菜名用中文，贴近真实家常菜名（如「番茄炒蛋」「青椒鸡胸肉」），不要起浮夸的名字。
+11. 所有菜品之间要有明显差异，不要推荐三道本质相同的菜。
+
+输出 JSON 结构（必须严格遵守）：
+{
+  "recipes": [
+    {
+      "name": "番茄鸡蛋豆腐",
+      "description": "一句话介绍，20 字以内",
+      "time_minutes": 15,
+      "difficulty": "easy",
+      "ingredients": [
+        {"name": "西红柿", "quantity": 2, "unit": "个"},
+        {"name": "鸡蛋", "quantity": 2, "unit": "个"},
+        {"name": "豆腐", "quantity": 300, "unit": "g"}
+      ],
+      "steps": ["西红柿切块", "鸡蛋打散加少许盐", "热锅少油炒蛋盛出", "下西红柿炒出汁", "加豆腐和炒蛋翻匀调味"],
+      "nutrition": {
+        "calories_kcal": 320,
+        "protein_g": 24,
+        "carbs_g": 12,
+        "fat_g": 18,
+        "fiber_g": 3,
+        "sodium_mg": 620
+      },
+      "tags": ["高蛋白", "15分钟"]
+    }
+  ]
+}
+
+difficulty 只能是 easy、medium、hard 之一。
+ingredients 里只列这道菜需要的全部食材，不需要你判断哪些有库存——那部分由系统计算。"""
+
+
+def _fmt_inventory(items: list[FoodInventory]) -> str:
+    if not items:
+        return "（冰箱是空的）"
+    lines = []
+    for it in items:
+        days = ""
+        if it.expiry_date:
+            days = f"，剩余 {(it.expiry_date - __import__('datetime').date.today()).days} 天"
+        lines.append(
+            f"- {it.food_name}：{it.quantity:g}{it.unit}"
+            f"（{it.storage_location}，新鲜度：{it.freshness}{days}）"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_preference(pref: UserPreference | None, health: HealthPreference | None) -> str:
+    if pref is None:
+        return "用户未填写偏好，按普通家常菜处理。"
+
+    parts = [
+        f"- 菜系偏好：{pref.cuisine}",
+        f"- 口味：{pref.taste}",
+        f"- 单次烹饪时间上限：{pref.cook_time_max} 分钟",
+        f"- 饮食目标：{pref.diet_goal}",
+        f"- 不吃的食材（必须避开）：{'、'.join(pref.disliked_foods) or '无'}",
+        f"- 过敏食材（绝对禁止出现）：{'、'.join(pref.allergies) or '无'}",
+    ]
+    if health:
+        flags = []
+        if health.vegetarian:
+            flags.append("素食（不含任何肉类、禽类、海鲜）")
+        if health.low_carb:
+            flags.append("控制碳水")
+        if health.low_sodium:
+            flags.append("控制钠盐")
+        if health.low_fat:
+            flags.append("控制脂肪")
+        if health.high_protein:
+            flags.append("高蛋白")
+        if health.high_fiber:
+            flags.append("增加膳食纤维")
+        if flags:
+            parts.append(f"- 健康管理要求：{'、'.join(flags)}")
+        if health.height_cm and health.weight_kg:
+            parts.append(f"- 身高体重：{health.height_cm:g}cm / {health.weight_kg:g}kg")
+        if health.activity_level:
+            parts.append(f"- 运动频率：{health.activity_level}")
+    return "\n".join(parts)
+
+
+def _build_user_prompt(
+    inventory: list[FoodInventory],
+    pref: UserPreference | None,
+    health: HealthPreference | None,
+    count: int,
+    max_time: int,
+    expiring: list[str],
+    extra_notes: str | None,
+) -> str:
+    expiring_line = (
+        f"\n⚠️ 即将过期，请优先消耗：{'、'.join(expiring)}\n" if expiring else ""
+    )
+    notes = f"\n用户补充说明：{extra_notes}\n" if extra_notes else ""
+    return f"""请为用户推荐 {count} 道菜。
+
+【冰箱现有库存】（这是唯一真实存在的食材，不得声称拥有其他食材）
+{_fmt_inventory(inventory)}
+{expiring_line}
+【用户画像与约束】
+{_fmt_preference(pref, health)}
+
+【额外要求】
+- 每道菜烹饪时间不超过 {max_time} 分钟
+- 尽量只用库存里已有的食材，把缺的东西明确列出来
+- 只返回 JSON{notes}"""
+
+
+def _normalize_unit(u: str) -> str:
+    return (u or "").strip().lower()
+
+
+def recompute_availability(
+    ingredients: list[RecipeIngredientOut], inventory: list[FoodInventory]
+) -> list[MissingIngredient]:
+    """用真实库存重算「缺什么」，并**就地**修正每个食材的 available 标记。
+
+    ⚠️ 这是全项目判断「食材有没有」的**唯一实现**。
+    菜谱生成、菜谱详情、菜谱列表都调它，不允许各处自己写一遍。
+
+    为什么必须唯一：以前菜谱详情和采购服务各写了一份判断，
+    结果单位对不上时（库存记「1 盒豆腐」，菜谱要「300 g」）两边结论相反，
+    菜谱页显示「豆腐 ✓ 有」、采购页却让你去买豆腐。见 MEMORY.md 铁律 7。
+
+    规则（三条都要和 shopping_service 保持一致）：
+        1. 库存里完全没有这种食材 → 缺，按菜谱要的量全额计入
+        2. 单位能对上 → 比数量，不够就缺差额
+        3. 单位对不上且无法换算 → **按「大概率有」处理，不列入采购**。
+           让用户去买冰箱里已经有的东西，比漏买一样更糟。
+    """
+    stock: dict[str, FoodInventory] = {}
+    for it in inventory:
+        stock.setdefault(it.food_name.strip(), it)
+
+    missing: list[MissingIngredient] = []
+
+    for ing in ingredients:
+        owned = stock.get(ing.name.strip())
+        if owned is None:
+            ing.available = False
+            missing.append(
+                MissingIngredient(name=ing.name, quantity=ing.quantity, unit=ing.unit)
+            )
+            continue
+
+        if _normalize_unit(owned.unit) == _normalize_unit(ing.unit):
+            have = float(owned.quantity or 0)
+            need = float(ing.quantity or 0)
+            ing.available = have >= need > 0 or (need == 0 and have > 0)
+            if not ing.available:
+                missing.append(
+                    MissingIngredient(
+                        name=ing.name, quantity=round(need - have, 2), unit=ing.unit
+                    )
+                )
+        else:
+            ing.available = True
+
+    return missing
+
+
+def _recompute_availability(
+    ingredients: list[dict], inventory: list[FoodInventory]
+) -> tuple[list[RecipeIngredientOut], list[MissingIngredient]]:
+    """把 AI 返回的原始食材列表规范化，再交给 recompute_availability 判缺料。"""
+    normalized: list[RecipeIngredientOut] = []
+
+    for raw in ingredients:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        try:
+            need = float(raw.get("quantity") or 0)
+        except (TypeError, ValueError):
+            need = 0.0
+        unit = str(raw.get("unit") or "g").strip()
+        optional = bool(raw.get("optional", False))
+
+        normalized.append(
+            RecipeIngredientOut(
+                name=name, quantity=need, unit=unit, available=False, optional=optional
+            )
+        )
+
+    missing = recompute_availability(normalized, inventory)
+    return normalized, missing
+
+
+def _mock_recipes(
+    inventory: list[FoodInventory], count: int, expiring: list[str]
+) -> list[dict]:
+    """无密钥时的兜底菜谱，保证演示链路完整。"""
+    names = [i.food_name for i in inventory] or ["鸡蛋", "西红柿"]
+    pool = [
+        {
+            "name": "番茄鸡蛋豆腐",
+            "description": "家常快手，酸甜下饭",
+            "time_minutes": 15,
+            "difficulty": "easy",
+            "ingredients": [
+                {"name": "西红柿", "quantity": 2, "unit": "个"},
+                {"name": "鸡蛋", "quantity": 2, "unit": "个"},
+                {"name": "豆腐", "quantity": 300, "unit": "g"},
+                {"name": "小葱", "quantity": 10, "unit": "g"},
+            ],
+            "steps": ["西红柿切块，豆腐切厚片", "鸡蛋打散加少许盐",
+                      "热锅少油，炒蛋至凝固盛出", "下西红柿炒出汁水",
+                      "加豆腐与炒蛋，翻匀后调味出锅"],
+            "nutrition": {"calories_kcal": 320, "protein_g": 24, "carbs_g": 12,
+                          "fat_g": 18, "fiber_g": 3, "sodium_mg": 620},
+            "tags": ["家常菜", "15分钟"],
+        },
+        {
+            "name": "香煎鸡胸配西兰花",
+            "description": "高蛋白低油，健身友好",
+            "time_minutes": 25,
+            "difficulty": "easy",
+            "ingredients": [
+                {"name": "鸡胸肉", "quantity": 200, "unit": "g"},
+                {"name": "西兰花", "quantity": 200, "unit": "g"},
+                {"name": "黑胡椒", "quantity": 2, "unit": "g"},
+            ],
+            "steps": ["鸡胸肉拍松，用盐和黑胡椒腌 10 分钟", "西兰花切小朵焯水",
+                      "平底锅刷薄油，中火煎鸡胸每面 4 分钟", "静置 3 分钟后切片装盘"],
+            "nutrition": {"calories_kcal": 280, "protein_g": 42, "carbs_g": 10,
+                          "fat_g": 8, "fiber_g": 4, "sodium_mg": 380},
+            "tags": ["高蛋白", "低油"],
+        },
+        {
+            "name": "青椒炒鸡蛋",
+            "description": "三分钟出锅的下饭菜",
+            "time_minutes": 10,
+            "difficulty": "easy",
+            "ingredients": [
+                {"name": "青椒", "quantity": 2, "unit": "个"},
+                {"name": "鸡蛋", "quantity": 3, "unit": "个"},
+            ],
+            "steps": ["青椒去籽切丝", "鸡蛋打散", "热锅下蛋液炒散盛出",
+                      "下青椒丝大火翻炒 1 分钟", "回锅鸡蛋，加盐炒匀"],
+            "nutrition": {"calories_kcal": 240, "protein_g": 16, "carbs_g": 8,
+                          "fat_g": 16, "fiber_g": 2, "sodium_mg": 540},
+            "tags": ["快手菜", "10分钟"],
+        },
+    ]
+    out = pool[: max(1, min(count, len(pool)))]
+    if expiring:
+        for r in out:
+            r.setdefault("tags", []).append("消耗临期")
+    logger.info("MOCK 菜谱已生成，库存食材参考: %s", names)
+    return out
+
+
+def generate_recipes(
+    *,
+    inventory: list[FoodInventory],
+    pref: UserPreference | None,
+    health: HealthPreference | None,
+    count: int = 3,
+    max_time: int | None = None,
+    expiring: list[str] | None = None,
+    extra_notes: str | None = None,
+) -> tuple[list[RecipeOut], str]:
+    """返回 (菜谱列表, 使用的模型名)。"""
+    expiring = expiring or []
+    effective_max_time = max_time or (pref.cook_time_max if pref else 30)
+
+    if not inventory:
+        # 冰箱为空时不调用模型，直接返回空列表，前端引导用户先扫描
+        return [], "none"
+
+    if ai_client.enabled:
+        try:
+            data = ai_client.chat_json(
+                system=RECIPE_SYSTEM_PROMPT,
+                user_text=_build_user_prompt(
+                    inventory, pref, health, count, effective_max_time,
+                    expiring, extra_notes,
+                ),
+                model=settings.TEXT_MODEL,
+                temperature=0.7,
+            )
+            raw_recipes = data.get("recipes") or []
+            model_name = settings.TEXT_MODEL
+        except AIUnavailable as exc:
+            logger.error("菜谱生成失败，降级为 MOCK: %s", exc)
+            raw_recipes = _mock_recipes(inventory, count, expiring)
+            model_name = "mock"
+    else:
+        raw_recipes = _mock_recipes(inventory, count, expiring)
+        model_name = "mock"
+
+    results: list[RecipeOut] = []
+    seen_names: set[str] = set()
+    for raw in raw_recipes:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        # 同一次返回里也要去重：模型偶尔会把同一道菜换个说法再给一遍，
+        # 不去掉的话刚生成就会出现两张一模一样的卡片。
+        if name in seen_names:
+            logger.info("本次生成出现重名菜谱，已跳过：%s", name)
+            continue
+        seen_names.add(name)
+
+        ingredients, missing = _recompute_availability(
+            raw.get("ingredients") or [], inventory
+        )
+        nutrition_raw = raw.get("nutrition") or {}
+        if not isinstance(nutrition_raw, dict):
+            nutrition_raw = {}
+        nutrition_raw.pop("disclaimer", None)
+
+        used_expiring = [
+            ing.name for ing in ingredients if ing.name in expiring and ing.available
+        ]
+
+        try:
+            nutrition = NutritionEstimate(**nutrition_raw)
+        except Exception:  # noqa: BLE001
+            nutrition = NutritionEstimate()
+
+        difficulty = str(raw.get("difficulty") or "easy").lower()
+        if difficulty not in ("easy", "medium", "hard"):
+            difficulty = "easy"
+
+        try:
+            time_minutes = int(raw.get("time_minutes") or 30)
+        except (TypeError, ValueError):
+            time_minutes = 30
+
+        steps = [str(s).strip() for s in (raw.get("steps") or []) if str(s).strip()]
+        tags = [str(t) for t in (raw.get("tags") or [])]
+
+        results.append(
+            RecipeOut(
+                name=name,
+                description=str(raw.get("description") or "")[:200],
+                time_minutes=max(1, time_minutes),
+                difficulty=difficulty,  # type: ignore[arg-type]
+                ingredients=ingredients,
+                missing_ingredients=missing,
+                steps=steps,
+                nutrition=nutrition,
+                tags=tags,
+                uses_expiring=used_expiring,
+                # 配料表非空且一样不缺 = 现在就能做
+                ready=bool(ingredients) and not missing,
+                # 配图由本地图片库决定，不看模型脸色 —— 模型只会给菜名，
+                # 图片匹配是纯规则，确定性、不花钱、断网也有。
+                image_url=resolve_image_url(name, [i.name for i in ingredients]),
+            )
+        )
+
+    return results[:count], model_name

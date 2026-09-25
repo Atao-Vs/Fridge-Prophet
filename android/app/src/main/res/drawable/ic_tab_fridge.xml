@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 机身 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:pathData="M8,3 L16,3 A2,2 0 0 1 18,5 L18,19 A2,2 0 0 1 16,21 L8,21 A2,2 0 0 1 6,19 L6,5 A2,2 0 0 1 8,3 Z" />
+    <!-- 冷藏/冷冻分隔线 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:pathData="M6,9.5 L18,9.5" />
+    <!-- 上下两个把手 -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M14.5,6 L14.5,8" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M14.5,12.5 L14.5,14.5" />
+</vector>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 冰箱图标。白色冰箱机身 + 绿色分隔线与把手，绿色底 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 机身 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,26 L72,26 A6,6 0 0 1 78,32 L78,76 A6,6 0 0 1 72,82 L36,82 A6,6 0 0 1 30,76 L30,32 A6,6 0 0 1 36,26 Z" />
+
+    <!-- 冷藏/冷冻分隔线 -->
+    <path
+        android:fillColor="#2E7D5B"
+        android:pathData="M30,46 L78,46 L78,50 L30,50 Z" />
+
+    <!-- 上层把手 -->
+    <path
+        android:fillColor="#2E7D5B"
+        android:pathData="M68,33 L71,33 L71,42 L68,42 Z" />
+
+    <!-- 下层把手 -->
+    <path
+        android:fillColor="#2E7D5B"
+        android:pathData="M68,55 L71,55 L71,64 L68,64 Z" />
+
+    <!-- 右下角一片叶子，点出「食材」含义 -->
+    <path
+        android:fillColor="#7BC49A"
+        android:pathData="M66,70 C70,66 76,66 78,68 C76,74 70,76 66,74 C66.5,72.5 66.5,71.5 66,70 Z" />
+</vector>

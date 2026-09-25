@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  【正式包配置】只允许 HTTPS，禁止一切明文流量。
+
+  开发调试用的宽松配置在 src/debug/res/xml/network_security_config.xml，
+  Gradle 构建 debug 包时会自动用那一份覆盖这份。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

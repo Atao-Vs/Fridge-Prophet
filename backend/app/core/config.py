@@ -1,0 +1,85 @@
+"""全局配置。所有可调参数集中在这里，通过环境变量或 .env 覆盖。"""
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=BASE_DIR / ".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # ---- 应用 ----
+    APP_NAME: str = "冰箱先知 Fridge Prophet API"
+    APP_VERSION: str = "0.1.0"
+    DEBUG: bool = True
+    API_PREFIX: str = "/api/v1"
+
+    # ---- 数据库 ----
+    # 开发：SQLite（默认）
+    # 上线：Supabase 托管 PostgreSQL
+    #   直连（适合常驻服务器）：
+    #     postgresql+psycopg://postgres.<ref>:密码@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
+    #   连接池（适合 Serverless）：
+    #     postgresql+psycopg://postgres.<ref>:密码@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+    # 注意：SQLite 和 Postgres 之间切换只需改这一行，模型层无需改动
+    DATABASE_URL: str = f"sqlite:///{BASE_DIR / 'fridge_prophet.db'}"
+
+    # ---- 鉴权 ----
+    SECRET_KEY: str = "dev-only-change-me-in-production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 14  # 14 天
+
+    # ---- AI（阿里云百炼 / DashScope 的 OpenAI 兼容接口）----
+    # 留空则自动进入 MOCK 模式，用内置假数据跑通全流程
+    DASHSCOPE_API_KEY: str = ""
+    AI_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    VISION_MODEL: str = "qwen-vl-max"
+    TEXT_MODEL: str = "qwen-plus"
+    AI_TIMEOUT_SECONDS: float = 90.0
+
+    # ---- 上传 ----
+    MAX_UPLOAD_MB: int = 10
+    UPLOAD_DIR: Path = BASE_DIR / "uploads"
+
+    # ---- 内置静态资源（菜谱配图等）----
+    # 和 UPLOAD_DIR 的区别：uploads 是**用户产生的**（会被 .gitignore 忽略），
+    # static 是**项目自带的**，要跟着 Git 走、部署时一起传上去。
+    STATIC_DIR: Path = BASE_DIR / "static"
+
+    # ---- Supabase Storage（可选）----
+    # 配好之后冰箱照片会存到 Supabase，而不是服务器本地磁盘。
+    # 好处：服务器重装/换机器照片不丢，且自带 CDN 加速。
+    # SUPABASE_URL 形如 https://abcdefgh.supabase.co
+    # SUPABASE_SERVICE_KEY 是 service_role key（Settings → API），只能放后端，绝不能进 App
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
+    SUPABASE_BUCKET: str = "fridge-photos"
+
+    @property
+    def supabase_storage_enabled(self) -> bool:
+        return bool(self.SUPABASE_URL.strip() and self.SUPABASE_SERVICE_KEY.strip())
+
+    @property
+    def ai_enabled(self) -> bool:
+        return bool(self.DASHSCOPE_API_KEY.strip())
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.MAX_UPLOAD_MB * 1024 * 1024
+
+
+@lru_cache
+def get_settings() -> Settings:
+    s = Settings()
+    s.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # static 目录必须**存在**才能挂载（StaticFiles 在目录缺失时直接抛错），
+    # 所以启动时顺手建出来，哪怕里面暂时没有图片。
+    s.STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    return s
+
+
+settings = get_settings()

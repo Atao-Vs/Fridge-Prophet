@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 品牌主色：白色 / 绿色 / 橙色（对应策划书的视觉要求）-->
+    <color name="brand_green">#2E7D5B</color>
+    <color name="brand_green_light">#E3F1E9</color>
+    <color name="brand_orange">#E8813A</color>
+    <color name="brand_orange_light">#FBEBDD</color>
+    <color name="brand_red">#C7463B</color>
+
+    <color name="window_background">#FFFDFB</color>
+    <color name="ic_launcher_background">#2E7D5B</color>
+</resources>

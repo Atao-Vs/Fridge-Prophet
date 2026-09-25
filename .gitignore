@@ -1,0 +1,115 @@
+# ============================================================
+#  冰箱先知 —— 忽略规则
+#
+#  重点保护三类东西：
+#    1. 密钥与凭据：.env、keystore.properties、*.jks
+#    2. 本机路径：local.properties
+#    3. 构建产物：build/、.gradle/、__pycache__/
+#  这些一旦提交进仓库，轻则别人拉下来编译不过，重则密钥泄露。
+# ============================================================
+
+# ---------- 凭据（最重要，别删）----------
+.env
+.env.*
+!.env.example
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# ---------- 本机专属配置 ----------
+local.properties
+
+# ---------- AI 助手的工作记忆（本机专属）----------
+# 里面是本机路径、局域网 IP、调试排查笔记，队友 clone 下来用不上。
+# 项目规范本身写在 README.md 和 docs/ 里，不依赖这个目录。
+# 如果你确实想和队友共享这些笔记，把下面这行删掉即可。
+.workbuddy-ai/
+
+# ---------- Android / Gradle ----------
+.gradle/
+build/
+captures/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+lint-results*.html
+lint-results*.xml
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.python-version
+*.egg-info/
+dist/
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# ---------- 数据库与运行时产物 ----------
+*.db
+*.sqlite
+*.sqlite3
+fridge_prophet.db
+# 数据库备份：tools/dedupe-recipes.py 之类会先存一份这种名字的副本再动手。
+# 注意 *.db 匹配不到它（结尾是时间戳不是 .db），必须单独写一条。
+*.db.bak-*
+backend/uploads/
+backend/static/uploads/
+*.log
+
+# ---------- 本机构建产物与调试截图 ----------
+# 打好的 APK、真机截图、食材图总览、ip.txt 之类，都是本机跑出来的。
+# 交付物是源码 + backend/static/ 下的图片资产，不包含这个目录。
+outputs/
+
+# 菜谱配图的**原始生成文件**（PNG，每张 2 MB 左右）。
+# 真正要提交的是转好的 JPG，在 backend/static/recipes/ 下（那目录不忽略）。
+# 这里保留原始文件只是为了以后想换尺寸/质量时能重转，不用重新花积分生成。
+.tmp-images/
+# 食材图的原始生成文件（同上，真正要提交的是 backend/static/ingredients/ 下的 JPG）
+.tmp-images-ingredients/
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.vscode/
+!.vscode/extensions.json
+
+# ---------- 系统 ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---------- 临时 ----------
+*.tmp
+*.bak
+*.swp
+*~
+.tmp/
+tmp/

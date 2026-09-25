@@ -88,6 +88,20 @@ jobs:
           echo "--- 改后的 jvmargs ---"
           grep '^org.gradle.jvmargs' gradle.properties
 
+      # ---------- 移除国内镜像 ----------
+      # settings.gradle.kts 把 maven.aliyun.com 排在 Google / Maven Central 前面，
+      # 那在国内开发机上能加速，但在 GitHub 的海外 runner 上有两个问题：
+      #   1. 绕远路，反而更慢；
+      #   2. 阿里云对 Gradle Plugin Portal 的镜像不完整 ——
+      #      KSP 的 plugin marker（com.google.devtools.ksp.gradle.plugin）
+      #      就是在这里解析失败的，报 "was not found in any of the following sources"。
+      # 摘掉之后只剩 Google / Maven Central / Gradle Plugin Portal 三个官方源，够用。
+      - name: 移除 CI 上不需要的国内镜像
+        run: |
+          sed -i '/maven\.aliyun\.com/d' settings.gradle.kts
+          echo "--- 改后的仓库配置 ---"
+          cat settings.gradle.kts
+
       # ---------- 签名密钥 ----------
       # 仓库 Secrets 里配了 KEYSTORE_BASE64 就用真密钥签名；
       # 没配就退化成 debug 签名，保证 fork 出去的人也能构建成功。
